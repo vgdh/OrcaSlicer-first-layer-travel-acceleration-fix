@@ -218,9 +218,9 @@ class Gcode:
         if self.command != "G1":
             return False
         found_x = next((gc for gc in self.parameters if gc.name ==
-                       "X" and gc.value is not None), None)
+                        "X" and gc.value is not None), None)
         found_y = next((gc for gc in self.parameters if gc.name ==
-                       "Y" and gc.value is not None), None)
+                        "Y" and gc.value is not None), None)
         if found_x is not None or found_y is not None:
             return True
         return False
@@ -229,7 +229,7 @@ class Gcode:
         if self.command != "G1":
             return False
         found_z = next((gc for gc in self.parameters if gc.name ==
-                       "Z" and gc.value is not None), None)
+                        "Z" and gc.value is not None), None)
         if found_z is not None:
             return True
         return False
@@ -241,7 +241,7 @@ class Gcode:
 
     def is_extruder_move(self):
         found_e = next((gc for gc in self.parameters if gc.name ==
-                       "E" and gc.value is not None), None)
+                        "E" and gc.value is not None), None)
         if found_e is not None and self.command != "G92":
             return True
         return False
@@ -560,16 +560,19 @@ def main():
     for original_gcode_id in range(len(gcodes)):
         if gcodes[original_gcode_id].command == "; CONFIG_BLOCK_START":
             for original_gcode_id_2 in range(original_gcode_id, len(gcodes)):
-                if gcodes[original_gcode_id_2].command is not None and gcodes[original_gcode_id_2].command.startswith("; travel_acceleration"):
+                if gcodes[original_gcode_id_2].command is not None and gcodes[original_gcode_id_2].command.startswith(
+                        "; travel_acceleration"):
                     travel_acceleration = gcodes[original_gcode_id_2].command.split("=")[
                         1].strip()
                     travel_acceleration = int(travel_acceleration)
-                elif gcodes[original_gcode_id_2].command is not None and gcodes[original_gcode_id_2].command.startswith("; initial_layer_acceleration"):
+                elif gcodes[original_gcode_id_2].command is not None and gcodes[original_gcode_id_2].command.startswith(
+                        "; initial_layer_acceleration"):
                     initial_layer_acceleration = gcodes[original_gcode_id_2].command.split("=")[
                         1].strip()
                     initial_layer_acceleration = int(
                         initial_layer_acceleration)
-                elif gcodes[original_gcode_id_2].command is not None and gcodes[original_gcode_id_2].command.startswith("; gcode_flavor"):
+                elif gcodes[original_gcode_id_2].command is not None and gcodes[original_gcode_id_2].command.startswith(
+                        "; gcode_flavor"):
                     gcode_flavor = gcodes[original_gcode_id_2].command.split("=")[
                         1].strip()
 
@@ -579,26 +582,44 @@ def main():
     gcode_for_save = []
     print(f"Compiling the gcode file")
     layer = 0
+    travel_mode = False
     for original_gcode_id in range(len(gcodes)):
-        if gcodes[original_gcode_id].command == ";LAYER_CHANGE":
+        if layer < 2 and gcodes[original_gcode_id].command == ";LAYER_CHANGE":
             layer += 1
 
-        if layer < 2 and gcodes[original_gcode_id].is_extruder_move() == False and gcodes[original_gcode_id].is_xy_movement() == True:
-            travel_accel_gcode = Gcode(
-                command=create_acceleration_command(gcode_flavor, travel_acceleration))
-            print_accel_gcode = Gcode(
-                command=create_acceleration_command(gcode_flavor, initial_layer_acceleration))
-            gcode_for_save.append(travel_accel_gcode)
+        if layer < 2:
+            if (travel_mode is False
+                    and gcodes[original_gcode_id].is_extruder_move() is False
+                    and gcodes[original_gcode_id].is_xy_movement() is True
+                    and gcodes[original_gcode_id].move_length() > 1):
+                travel_mode = True
+                travel_accel_gcode = Gcode(
+                    command=create_acceleration_command(gcode_flavor, travel_acceleration),
+                    comment="travel accel")
+                gcode_for_save.append(travel_accel_gcode)
+            elif travel_mode is True and gcodes[original_gcode_id].is_extruder_move() is True:
+                travel_mode = False
+                print_accel_gcode = Gcode(
+                    command=create_acceleration_command(gcode_flavor, initial_layer_acceleration),
+                    comment="print accel")
+                gcode_for_save.append(print_accel_gcode)
+
             gcode_for_save.append(gcodes[original_gcode_id])
-            gcode_for_save.append(print_accel_gcode)
+
         else:
+            if travel_mode:
+                travel_mode = False
+                print_accel_gcode = Gcode(
+                    command=create_acceleration_command(gcode_flavor, initial_layer_acceleration),
+                    comment="print accel")
+                gcode_for_save.append(print_accel_gcode)
             gcode_for_save.append(gcodes[original_gcode_id])
 
     destFilePath = file_path
     if save_to_file is not None:
         save_to_file
         destFilePath = re.sub(r'\.gcode$', '', file_path) + \
-            '_post_processed.gcode'
+                       '_post_processed.gcode'
 
     delete_file_if_exists(destFilePath)
     with open(destFilePath, "w", encoding='utf-8') as writefile:
