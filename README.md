@@ -1,5 +1,7 @@
 # OrcaSlicer first layer travel acceleration fix
-This is a post-processor for G-code files. 
+
+This is a post-processor for G-code files.
+
 It fixes a slow acceleration for travel moves at the first layer.
  
 ## How to use the script
