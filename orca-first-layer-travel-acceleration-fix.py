@@ -403,54 +403,6 @@ def read_gcode_file(path: str) -> List[Gcode]:
     return gcodes
 
 
-def calculate_length_of_lines(sliced: List[Gcode]) -> float:
-    length = 0
-    for gcode in sliced:
-        if gcode.is_xy_movement() is False:
-            continue
-        length_of_move = gcode.move_length()
-        if length_of_move is not None:
-            length += length_of_move
-    return length
-
-
-def find_closed_loops(gcodes: List[Gcode],
-                      max_distance_start_end: float,
-                      min_loop_length: float,
-                      first_layer_height: float):
-    loops = []
-    start = None
-    end = None
-    for gcode_id in range(len(gcodes)):
-        gcode = gcodes[gcode_id]
-        if gcode.is_xy_movement() is False:
-            continue
-
-        if gcode.is_extruder_move():
-            if start is None and gcode.state().Z > first_layer_height and gcode.is_outer_perimeter():
-                start = gcode
-                end = gcode
-            else:
-                end = gcode
-
-        if start is not None and gcode.is_extruder_move() is False:
-            start_state = start.previous_state
-            end_state = end.state()
-            distance = distance_between_points(
-                start_state.X, start_state.Y, end_state.X, end_state.Y)
-            if distance < max_distance_start_end:
-                start_index = gcodes.index(start)
-                end_index = gcodes.index(end)
-                sliced = gcodes[start_index:end_index + 1]
-                loop_length = calculate_length_of_lines(sliced)
-                if loop_length > min_loop_length:
-                    loops.append((start_index, end_index))
-                    print(f"Found a loop number {len(loops)}")
-            start = None
-            end = None
-
-    return loops
-
 
 def vector_from_points(p1, p2):
     return [p2[0] - p1[0], p2[1] - p1[1]]
@@ -471,39 +423,6 @@ def vector_mag(v):
 def vector_norm(v):
     m = vector_mag(v)
     return [v[0] / m, v[1] / m]
-
-
-def cut_gcode(gcode: Gcode, distance: float):
-    # Define the start and end points as lists
-    start = [gcode.previous_state.X, gcode.previous_state.Y]
-    end = [gcode.state().X, gcode.state().Y]
-    # Calculate the direction vector of the line
-    direction = vector_from_points(start, end)
-    # Normalize the direction vector to unit length
-    direction = vector_norm(direction)
-    point = vector_add(start, vector_mul(direction,
-                                         distance))  # Calculate the point on the line at the given distance from the start
-
-    if gcode.extrude_is_absolute:
-        raise Exception("extrude mast to be relative")
-
-    length = gcode.move_length()
-    ratio = distance / length
-
-    extruded_length = gcode.get_param("E")
-    extruded_position_1 = extruded_length * ratio
-    extruded_position_2 = extruded_length - extruded_position_1
-
-    gcode1 = gcode.clone()
-    gcode1.set_param(name="X", value=point[0])
-    gcode1.set_param(name="Y", value=point[1])
-    gcode1.set_param(name="E", value=extruded_position_1)
-
-    gcode2 = gcode.clone()
-    gcode2.set_param(name="E", value=extruded_position_2)
-    gcode2.previous_state = gcode1.state()
-
-    return gcode1, gcode2
 
 
 def convert_to_relative_extrude(gcodes: List[Gcode]):
@@ -540,71 +459,76 @@ def convert_to_relative_extrude(gcodes: List[Gcode]):
 def main():
     parser = argparse.ArgumentParser(description='Seam hide post-process')
     parser.add_argument('path', help='the path to the file')
-    parser.add_argument('--first_layer', dest='first_layer',
-                        default=0.3, type=float)
     parser.add_argument('--save_to_file', dest='save_to_file',
                         default=None, type=bool)
 
     args = parser.parse_args()
 
     save_to_file = args.save_to_file
-    first_layer_height = args.first_layer
     file_path = args.path
-
-    # prusa_env_output_name = str(os.getenv('SLIC3R_PP_OUTPUT_NAME'))
-    gcodes = read_gcode_file(file_path)
-
+    
     travel_acceleration = None
     initial_layer_acceleration = None
     gcode_flavor = None
-    for original_gcode_id in range(len(gcodes)):
-        if gcodes[original_gcode_id].command == "; CONFIG_BLOCK_START":
-            for original_gcode_id_2 in range(original_gcode_id, len(gcodes)):
-                if gcodes[original_gcode_id_2].command is not None and gcodes[original_gcode_id_2].command.startswith(
-                        "; travel_acceleration"):
-                    travel_acceleration = gcodes[original_gcode_id_2].command.split("=")[
-                        1].strip()
-                    travel_acceleration = int(travel_acceleration)
-                elif gcodes[original_gcode_id_2].command is not None and gcodes[original_gcode_id_2].command.startswith(
-                        "; initial_layer_acceleration"):
-                    initial_layer_acceleration = gcodes[original_gcode_id_2].command.split("=")[
-                        1].strip()
-                    initial_layer_acceleration = int(
-                        initial_layer_acceleration)
-                elif gcodes[original_gcode_id_2].command is not None and gcodes[original_gcode_id_2].command.startswith(
-                        "; gcode_flavor"):
-                    gcode_flavor = gcodes[original_gcode_id_2].command.split("=")[
-                        1].strip()
+
+    with open(file_path, "r", encoding='utf8') as readfile:
+        lines = readfile.readlines()
+        config_section = False
+        for line in lines:
+            if line.startswith("; CONFIG_BLOCK_START"):
+                config_section = True
+            if config_section == False:
+                continue
+            
+            if line.startswith("; travel_acceleration"):
+                travel_acceleration = line.split("=")[1].strip()
+                travel_acceleration = int(travel_acceleration)
+            elif line.startswith("; initial_layer_acceleration"):
+                initial_layer_acceleration = line.split("=")[1].strip()
+                initial_layer_acceleration = int(initial_layer_acceleration)
+            elif line.startswith("; gcode_flavor"):
+                gcode_flavor = line.split("=")[1].strip() 
+
 
     if travel_acceleration is None or initial_layer_acceleration is None or gcode_flavor is None:
         raise Exception()
 
+    print(f"Read to memory and modify")
     gcode_for_save = []
-    print(f"Compiling the gcode file")
     layer = 0
     travel_mode = False
-    for original_gcode_id in range(len(gcodes)):
-        if layer < 2 and gcodes[original_gcode_id].command == ";LAYER_CHANGE":
+    last_state = None
+    last_G1_gcode = None
+    for line in lines:
+        if layer < 2 and line.startswith(";LAYER_CHANGE"):
             layer += 1
 
         if layer < 2:
+            if line.startswith("G1"):
+                last_G1_gcode = parse_gcode_line(line, last_state)
+                last_state = last_G1_gcode.state()
+            else:
+                gcode_for_save.append(line)
+                continue
+    
             if (travel_mode is False
-                    and gcodes[original_gcode_id].is_extruder_move() is False
-                    and gcodes[original_gcode_id].is_xy_movement() is True
-                    and gcodes[original_gcode_id].move_length() > 1):
+                    and last_G1_gcode.is_extruder_move() is False
+                    and last_G1_gcode.is_xy_movement() is True
+                    and last_G1_gcode.move_length() > 1):
                 travel_mode = True
                 travel_accel_gcode = Gcode(
                     command=create_acceleration_command(gcode_flavor, travel_acceleration),
                     comment="travel accel")
-                gcode_for_save.append(travel_accel_gcode)
-            elif travel_mode is True and gcodes[original_gcode_id].is_extruder_move() is True:
+                gcode_for_save.append(str(travel_accel_gcode) + "\n")
+            elif (travel_mode is True 
+                    and last_G1_gcode.is_extruder_move() is True):
                 travel_mode = False
                 print_accel_gcode = Gcode(
                     command=create_acceleration_command(gcode_flavor, initial_layer_acceleration),
                     comment="print accel")
-                gcode_for_save.append(print_accel_gcode)
-
-            gcode_for_save.append(gcodes[original_gcode_id])
+                gcode_for_save.append(str(print_accel_gcode) + "\n")
+            
+            gcode_for_save.append(line)
 
         else:
             if travel_mode:
@@ -612,9 +536,11 @@ def main():
                 print_accel_gcode = Gcode(
                     command=create_acceleration_command(gcode_flavor, initial_layer_acceleration),
                     comment="print accel")
-                gcode_for_save.append(print_accel_gcode)
-            gcode_for_save.append(gcodes[original_gcode_id])
+                gcode_for_save.append(str(print_accel_gcode) + "\n")
+            gcode_for_save.append(line)
 
+
+    print(f"Save to file")
     destFilePath = file_path
     if save_to_file is not None:
         save_to_file
@@ -623,8 +549,7 @@ def main():
 
     delete_file_if_exists(destFilePath)
     with open(destFilePath, "w", encoding='utf-8') as writefile:
-        for gcode in gcode_for_save:
-            writefile.write(str(gcode) + "\n")
+            writefile.write("".join(gcode_for_save))
     writefile.close()
 
 

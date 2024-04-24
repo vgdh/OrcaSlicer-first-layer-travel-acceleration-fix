@@ -8,7 +8,7 @@
             "program": "${file}",
             "console": "integratedTerminal",
             "args": [
-                "example.gcode",
+                "example_big.gcode",
                 "--save_to_file",
                 "True"
             ]
